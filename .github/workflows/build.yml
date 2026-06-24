@@ -1,0 +1,131 @@
+name: Build WSL
+
+on:
+  push:
+    branches: ["feature/wslc-compose"]
+    tags: ["v*", "*.*.*"]
+  pull_request:
+    branches: ["master"]
+
+permissions:
+  contents: write
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+  DOTNET_NOLOGO: true
+  MSBUILDDISABLENODEREUSE: 1
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Ensure Git Describe Baseline
+        shell: pwsh
+        run: |
+          $testDescribe = git describe --tags --always 2>$null
+          if ($LASTEXITCODE -ne 0 -or -not $testDescribe) {
+              Write-Host "No reachable tags found on this branch context. Injecting dynamic CI baseline tag..."
+              git tag v0.0.0-ci-fallback
+          }
+        
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Setup MSBuild Toolset
+        uses: microsoft/setup-msbuild@v3
+
+      - name: Setup NuGet CLI
+        uses: nuget/setup-nuget@v4
+
+      - name: Install VS Components from .vsconfig
+        shell: pwsh
+        run: |
+          $vswhere = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path $vswhere)) { throw "vswhere.exe not found at $vswhere" }
+          
+          # ──────────────────────────────────────────────
+          # LOGGING: Dump all VS installations on the runner
+          # ──────────────────────────────────────────────
+          Write-Host "=== ALL VISUAL STUDIO INSTALLATIONS ===" -ForegroundColor Cyan
+          & $vswhere -all -format json | ConvertFrom-Json | ForEach-Object {
+              Write-Host "  Product: $($_.displayName)" -ForegroundColor Yellow
+              Write-Host "  Version: $($_.installationVersion)" -ForegroundColor Yellow
+              Write-Host "  Path:    $($_.installationPath)" -ForegroundColor Yellow
+              Write-Host "  Channel: $($_.channelId)" -ForegroundColor Yellow
+              Write-Host "  ---"
+          }
+          Write-Host "=== END VS INSTALLATIONS ===" -ForegroundColor Cyan
+          
+          # Find the latest installation path reliably across all product tiers
+          $vsPath = & $vswhere -latest -products * -property installationPath
+          if (-not $vsPath) { throw "Visual Studio installation target could not be resolved via vswhere." }
+          
+          Write-Host "Selected VS Installation: $vsPath" -ForegroundColor Green
+          
+          $vsInstaller = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vs_installer.exe"
+          if (-not (Test-Path $vsInstaller)) { throw "vs_installer.exe engine binary missing." }
+          
+          $configPath = Join-Path $env:GITHUB_WORKSPACE ".vsconfig"
+          if (-not (Test-Path $configPath)) { throw ".vsconfig configuration profile not found at $configPath" }
+          
+          Write-Host "Updating Visual Studio at '$vsPath' with components from .vsconfig..."
+          Write-Host "VS Installer path: $vsInstaller" -ForegroundColor Cyan
+          Write-Host "Config path: $configPath" -ForegroundColor Cyan
+          
+          $installerArgs = @(
+              "modify",
+              "--installPath", $vsPath,
+              "--config", $configPath,
+              "--quiet",
+              "--wait",
+              "--norestart"
+          )
+          
+          & $vsInstaller @installerArgs
+          
+          if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 3010) {
+              throw "VS Installer failed with exit code $LASTEXITCODE"
+          }
+          
+          Write-Host "VS Components installed successfully."
+
+      - name: Configure CMake
+        run: cmake -B build -S . -G "Visual Studio 18 2026" -A x64
+
+      - name: Build Full Solution Architecture
+        run: cmake --build build --config Debug
+
+      - name: Upload MSI package
+        uses: actions/upload-artifact@v7
+        with:
+          name: wsl-x64-msi
+          path: build/bin/x64/Debug/wsl.msi
+
+      - name: Upload MSIX packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: wsl-x64-msix-packages
+          path: |
+            build/bin/x64/Debug/gluepackage.msix
+            build/bin/x64/Debug/installer.msix
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            build/bin/x64/Debug/wsl.msi
+            build/bin/x64/Debug/gluepackage.msix
+            build/bin/x64/Debug/installer.msix
+          draft: false
+          prerelease: true
+          generate_release_notes: true
