@@ -23,6 +23,7 @@ Abstract:
 #include "InspectCommand.h"
 #include "VersionCommand.h"
 #include "VolumeCommand.h"
+#include "ComposeCommand.h"
 
 using namespace wsl::windows::wslc::execution;
 using namespace wsl::shared;
@@ -38,6 +39,7 @@ std::vector<std::unique_ptr<Command>> RootCommand::GetCommands() const
     commands.push_back(std::make_unique<SettingsCommand>(FullName()));
     commands.push_back(std::make_unique<SystemCommand>(FullName()));
     commands.push_back(std::make_unique<VolumeCommand>(FullName()));
+    commands.push_back(std::make_unique<ComposeCommand>(FullName()));
     commands.push_back(std::make_unique<ContainerAttachCommand>(FullName()));
     commands.push_back(std::make_unique<ImageBuildCommand>(FullName()));
     commands.push_back(std::make_unique<ContainerCreateCommand>(FullName()));
